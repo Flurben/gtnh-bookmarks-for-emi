@@ -1,0 +1,14 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.emicraftingtree.selftest.benchmixin",
+  "compatibilityLevel": "JAVA_17",
+  "client": [
+    "ClientSetupMixin",
+    "ForgeHooksClientMixin",
+    "GameRendererMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

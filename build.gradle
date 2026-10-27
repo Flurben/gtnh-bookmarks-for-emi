@@ -1,0 +1,158 @@
+plugins {
+    id 'eclipse'
+    id 'idea'
+    id 'net.minecraftforge.gradle' version '[6.0.24,6.2)'
+}
+
+version = mod_version
+group = mod_group_id
+
+base {
+    archivesName = mod_file_name
+}
+
+java.toolchain.languageVersion = JavaLanguageVersion.of(17)
+
+// Scripted in-game smoke test (./gradlew runClient -Pselftest); never packaged into the mod jar
+sourceSets {
+    selftest {
+        compileClasspath += sourceSets.main.output + sourceSets.main.compileClasspath
+        runtimeClasspath += sourceSets.main.output + sourceSets.main.runtimeClasspath
+    }
+}
+
+minecraft {
+    mappings channel: mapping_channel, version: mapping_version
+    copyIdeResources = true
+
+    runs {
+        configureEach {
+            workingDirectory project.file('run')
+            property 'forge.logging.markers', 'REGISTRIES'
+            property 'forge.logging.console.level', 'debug'
+            // EMI ships an SRG refmap; remap it so its mixins apply in the dev environment
+            property 'mixin.env.remapRefMap', 'true'
+            property 'mixin.env.refMapRemappingFile', "${projectDir}/build/createSrgToMcp/output.srg"
+            // This mod's mixins only target EMI's own (unobfuscated) methods, so they need no refmap. The baseline
+            // benchmark (-Pbaseline) leaves them out to measure EMI on its own.
+            if (!project.hasProperty('baseline')) {
+                args '-mixin.config=emicraftingtree.mixins.json'
+            }
+
+            mods {
+                "${mod_id}" {
+                    source sourceSets.main
+                }
+            }
+        }
+
+        client {
+            if (project.hasProperty('selftest') || project.hasProperty('benchmark')) {
+                if (project.hasProperty('selftest')) {
+                    property 'emicraftingtree.selftest', 'true'
+                }
+                // Benchmark (-Pbenchmark): frame timings with this mod, or with -Pbaseline EMI without it
+                if (project.hasProperty('benchmark')) {
+                    property 'emicraftingtree.benchmark', 'true'
+                    args '-mixin.config=emicraftingtree.benchmark.mixins.json'
+                    if (project.hasProperty('baseline')) {
+                        property 'emicraftingtree.baseline', 'true'
+                    }
+                    if (project.hasProperty('benchsize')) {
+                        property 'emicraftingtree.benchmark.recipes', project.property('benchsize')
+                    }
+                }
+                // -Pjfr records a Java Flight Recorder profile to run/benchmark/
+                if (project.hasProperty('jfr')) {
+                    jvmArg "-XX:StartFlightRecording=filename=${projectDir}/run/benchmark/${project.hasProperty('baseline') ? 'baseline' : 'mod'}${project.hasProperty('benchsize') ? '-' + project.property('benchsize') : ''}.jfr,settings=${project.file('run/benchmark/fine.jfc').exists() ? project.file('run/benchmark/fine.jfc') : 'profile'}"
+                }
+                // Lets the self-test hold modifier keys (Shift, Ctrl, Alt)
+                args '-mixin.config=emicraftingtree.selftest.mixins.json'
+                mods {
+                    "${mod_id}" {
+                        source sourceSets.selftest
+                    }
+                }
+            }
+        }
+    }
+}
+
+repositories {
+    maven {
+        name = 'TerraformersMC'
+        url = 'https://maven.terraformersmc.com/releases/'
+        content {
+            includeGroup 'dev.emi'
+        }
+    }
+}
+
+dependencies {
+    minecraft "net.minecraftforge:forge:${minecraft_version}-${forge_version}"
+
+    // The full jar (not just :api): the bookmark panel replaces EMI's favorites sidebar, which lives in EMI internals
+    implementation fg.deobf("dev.emi:emi-forge:${emi_version}")
+
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+test {
+    useJUnitPlatform()
+}
+
+tasks.named('processResources', ProcessResources).configure {
+    var replaceProperties = [
+            minecraft_version      : minecraft_version,
+            minecraft_version_range: minecraft_version_range,
+            forge_version_range    : forge_version_range,
+            loader_version_range   : loader_version_range,
+            emi_version_range      : emi_version_range,
+            mod_id                 : mod_id,
+            mod_name               : mod_name,
+            mod_license            : mod_license,
+            mod_version            : mod_version,
+            mod_authors            : mod_authors,
+            mod_description        : mod_description,
+            mod_url                : mod_url,
+    ]
+    inputs.properties replaceProperties
+
+    filesMatching(['META-INF/mods.toml', 'pack.mcmeta']) {
+        expand replaceProperties + [project: project]
+    }
+}
+
+tasks.named('jar', Jar).configure {
+    manifest {
+        attributes([
+                'Specification-Title'     : mod_id,
+                'Specification-Vendor'    : mod_authors,
+                'Specification-Version'   : '1',
+                'Implementation-Title'    : project.name,
+                'Implementation-Version'  : project.jar.archiveVersion,
+                'Implementation-Vendor'   : mod_authors,
+                'Implementation-Timestamp': new Date().format("yyyy-MM-dd'T'HH:mm:ssZ"),
+                'MixinConfigs'            : 'emicraftingtree.mixins.json'
+        ])
+    }
+
+    finalizedBy 'reobfJar'
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
+// -Pfastbench also runs the client with FastWorkbench (jars copied into compat-libs/, not committed), which changes
+// how the crafting table computes its result; auto-crafting has to work with it
+if (project.hasProperty('fastbench')) {
+    repositories {
+        flatDir { dirs 'compat-libs' }
+    }
+    dependencies {
+        runtimeOnly fg.deobf('compat:Placebo-1.20.1:8.6.3')
+        runtimeOnly fg.deobf('compat:FastWorkbench-1.20.1:8.0.4')
+    }
+}
